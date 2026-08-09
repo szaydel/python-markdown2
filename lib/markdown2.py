@@ -1109,8 +1109,12 @@ class Markdown:
             block += chunk
 
             if is_markup:
-                if self._tag_is_closed(is_markup.group(3), chunk):
-                    # if close tag is in same line we must ignore these
+                if (
+                    # if close tag in the same line
+                    self._tag_is_closed(is_markup.group(3), chunk)
+                    # or if we have an orphaned close tag
+                    or (tag_count == 0 and is_markup.group(2).startswith('</'))
+                ):
                     is_markup = None
                 else:
                     # add up all the open/close tags possibly in the same line and add that to the total
