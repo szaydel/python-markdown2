@@ -47,7 +47,7 @@ if __name__ == "__main__":
                 if version >= (2, 14, 0):
                     tag = "pygments<2.14"
                 else:
-                    tag = "pygments>=2.14"
+                    tag = "pygments>=2.21"
                 warnings.append("skipping {} tests (pygments {} found)".format(tag, mod.__version__))
                 default_tags.append("-%s" % tag)
 
