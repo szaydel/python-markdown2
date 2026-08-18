@@ -48,6 +48,7 @@ see <https://github.com/trentm/python-markdown2/wiki/Extras> for details):
 * break-on-newline: Alias for the on_newline option in the breaks extra.
 * code-friendly: Disable _ and __ for em and strong.
 * cuddled-lists: Allow lists to be cuddled to the preceding paragraph.
+* emojis: add emoji support using emoji codes
 * fenced-code-blocks: Allows a code block to not have to be indented
   by fencing it with '```' on a line before and after. Based on
   <http://github.github.com/github-flavored-markdown/> with support for
@@ -115,6 +116,7 @@ __version__ = '.'.join(map(str, __version_info__))
 __author__ = "Trent Mick"
 
 import argparse
+import html
 import logging
 import re
 import sys
@@ -364,7 +366,13 @@ class Markdown:
                 }
 
         if 'break-on-newline' in self.extras:
-            self.extras.setdefault('breaks', {})
+            # `break-on-newline` is an alias for the breaks extra's `on_newline`
+            # option. When both extras are given (e.g. extras=['breaks',
+            # 'break-on-newline']) `breaks` is already a key mapped to None, so
+            # setdefault would leave it None and the assignment below would
+            # raise a TypeError. Normalise to a dict before setting the option.
+            if not isinstance(self.extras.get('breaks'), dict):
+                self.extras['breaks'] = {}
             self.extras['breaks']['on_newline'] = True
 
         if 'link-patterns' in self.extras:
@@ -411,6 +419,8 @@ class Markdown:
         if "header-ids" in self.extras:
             if not hasattr(self, '_count_from_header_id') or self.extras['header-ids'].get('reset-count', False):
                 self._count_from_header_id = defaultdict(int)
+            if not hasattr(self, '_header_ids_seen') or self.extras['header-ids'].get('reset-count', False):
+                self._header_ids_seen = set()
         if "metadata" in self.extras:
             self.metadata: dict[str, Any] = {}
 
@@ -630,12 +640,21 @@ class Markdown:
     def _extract_metadata(self, text: str) -> str:
         if text.startswith("---"):
             fence_splits = re.split(self._meta_data_fence_pattern, text, maxsplit=2)
+            if len(fence_splits) < 3:
+                # A leading '---' with no closing fence is a horizontal rule (or
+                # unterminated front matter), not metadata. re.split returns
+                # fewer than three elements in that case, so leave text as-is.
+                return text
             metadata_content = fence_splits[1]
             tail = fence_splits[2]
         else:
             metadata_split = re.split(self._meta_data_newline, text, maxsplit=1)
             metadata_content = metadata_split[0]
-            tail = metadata_split[1]
+            # There is no blank line to split on when the whole document is a
+            # single block (e.g. a tab-indented code block with no trailing
+            # blank line), so re.split returns a single element and there is
+            # no document body after the metadata.
+            tail = metadata_split[1] if len(metadata_split) > 1 else ""
 
         # _meta_data_pattern only has one capturing group, so we can assume
         # the returned type to be list[str]
@@ -886,7 +905,7 @@ class Markdown:
         """ % _block_tags_a,
         re.X | re.M)
 
-    _block_tags_b = 'blockquote|div|dl|fieldset|form|h[1-6]|iframe|math|noscript|ol|p|pre|script|table|ul'
+    _block_tags_b = 'blockquote|div|dl|fieldset|form|h[1-6]|head|iframe|math|noscript|ol|p|pre|script|style|table|ul'
     _block_tags_b += _html5tags
 
     _span_tags = (
@@ -1621,13 +1640,21 @@ class Markdown:
             None to not have an id attribute and to exclude this header from
             the TOC (if the "toc" extra is specified).
         """
-        header_id = _slugify(text)
+        header_id = _slugify(html.unescape(text))
         if prefix and isinstance(prefix, str):
             header_id = prefix + '-' + header_id
 
-        self._count_from_header_id[header_id] += 1
-        if 0 == len(header_id) or self._count_from_header_id[header_id] > 1:
-            header_id += '-%s' % self._count_from_header_id[header_id]
+        base_id = header_id
+        self._count_from_header_id[base_id] += 1
+        if 0 == len(base_id) or self._count_from_header_id[base_id] > 1:
+            header_id = '%s-%s' % (base_id, self._count_from_header_id[base_id])
+        # A suffixed id may still collide with a differently-named header
+        # (e.g. "# Chapter" twice yields "chapter-2", which clashes with
+        # "# Chapter 2"). Keep bumping until the id is genuinely unique.
+        while header_id in self._header_ids_seen:
+            self._count_from_header_id[base_id] += 1
+            header_id = '%s-%s' % (base_id, self._count_from_header_id[base_id])
+        self._header_ids_seen.add(header_id)
 
         return header_id
 
@@ -3550,6 +3577,33 @@ class CodeFriendly(GFMItalicAndBoldProcessor):
         )
 
 
+class Emojis(Extra):
+    '''
+    Enable emoji support in markdown text using the [emoji library](https://github.com/carpedm20/emoji)
+    '''
+    name = 'emojis'
+    order = (), (Stage.PARAGRAPHS,)
+
+    def __init__(self, md: Markdown, options: Optional[dict]):
+        super().__init__(md, options)
+        self.options.setdefault('language', 'alias')
+
+    def run(self, text):
+        try:
+            import emoji
+        except ImportError:
+            raise ImportError('the "emoji" extra requires the "emoji" package to be installed')
+
+        if self.options:
+            return emoji.emojize(text, **self.options)
+        return emoji.emojize(text)
+
+    def test(self, text):
+        # emoji identifiers can have all sorts of chars (eg: `:A_button_(blood_type):`)
+        # but they all start and end with a colon and don't have spaces in as far as I can see
+        return re.search(r':[\S]+:', text)
+
+
 class FencedCodeBlocks(Extra):
     '''
     Allows a code block to not have to be indented
@@ -4176,18 +4230,21 @@ class Tables(Extra):
             ''' % (less_than_tab, less_than_tab, less_than_tab), re.M | re.X)
         return table_re.sub(self.sub, text)
 
-    def sub(self, match: re.Match[str]) -> str:
-        trim_space_re = r'^\s+|\s+$'
-        trim_bar_re = r'^\||\|$'
-        split_bar_re = r'^\||(?<![\`\\])\|'
-        escape_bar_re = r'\\\|'
+    @staticmethod
+    def _split_row(row: str) -> list[str]:
+        row = row.strip().removeprefix('|').removesuffix('|')
+        return [
+            re.sub(r'\\\|', '|', cell.strip())
+            for cell in re.split(r'(?<![\`\\])\|', row)
+        ]
 
+    def sub(self, match: re.Match[str]) -> str:
         head, underline, body = match.groups()
 
         # Determine aligns for columns.
-        cols = [re.sub(escape_bar_re, '|', cell.strip()) for cell in re.split(split_bar_re, re.sub(trim_bar_re, "", re.sub(trim_space_re, "", underline)))]
+        delimiter_cols = self._split_row(underline)
         align_from_col_idx = {}
-        for col_idx, col in enumerate(cols):
+        for col_idx, col in enumerate(delimiter_cols):
             if col[0] == ':' and col[-1] == ':':
                 align_from_col_idx[col_idx] = ' style="text-align:center;"'
             elif col[0] == ':':
@@ -4197,8 +4254,11 @@ class Tables(Extra):
 
         # thead
         hlines = ['<table%s>' % self.md._html_class_str_from_tag('table'), '<thead%s>' % self.md._html_class_str_from_tag('thead'), '<tr>']
-        cols = [re.sub(escape_bar_re, '|', cell.strip()) for cell in re.split(split_bar_re, re.sub(trim_bar_re, "", re.sub(trim_space_re, "", head)))]
-        for col_idx, col in enumerate(cols):
+        header_cols = self._split_row(head)
+        if len(header_cols) != len(delimiter_cols):
+            return match.group(0)
+        column_count = len(header_cols)
+        for col_idx, col in enumerate(header_cols):
             hlines.append('  <th{}>{}</th>'.format(
                 align_from_col_idx.get(col_idx, ''),
                 self.md._run_span_gamut(col)
@@ -4212,7 +4272,9 @@ class Tables(Extra):
             hlines.append('<tbody>')
             for line in body.split('\n'):
                 hlines.append('<tr>')
-                cols = [re.sub(escape_bar_re, '|', cell.strip()) for cell in re.split(split_bar_re, re.sub(trim_bar_re, "", re.sub(trim_space_re, "", line)))]
+                cols = self._split_row(line)
+                cols.extend([''] * (column_count - len(cols)))
+                cols = cols[:column_count]
                 for col_idx, col in enumerate(cols):
                     hlines.append('  <td{}>{}</td>'.format(
                         align_from_col_idx.get(col_idx, ''),
@@ -4371,6 +4433,7 @@ Admonitions.register()
 Alerts.register()
 Breaks.register()
 CodeFriendly.register()
+Emojis.register()
 FencedCodeBlocks.register()
 Latex.register()
 LinkPatterns.register()

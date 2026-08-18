@@ -272,6 +272,77 @@ versions of markdown2.py this was pathologically slow:</p>
             '<h2>%s</h2>\n' % ko)
     test_russian.tags = ["unicode", "issue3"]
 
+    def test_head_and_style_block_tags(self):
+        # `head` and `style` are block-level, but were missing from the
+        # liberal block-tag list, so a single-line `<style>...</style>` (or
+        # `<head>`) got wrapped in a spurious `<p>`.
+        self._assertMarkdown(
+            '<style>body { margin-left: 1.25cm; }</style>',
+            '<style>body { margin-left: 1.25cm; }</style>\n')
+        self._assertMarkdown(
+            '<head><meta charset="UTF-8"></head>',
+            '<head><meta charset="UTF-8"></head>\n')
+    test_head_and_style_block_tags.tags = ["html", "issue331"]
+
+    def test_breaks_and_break_on_newline_together(self):
+        # `break-on-newline` is an alias for the breaks extra; supplying both
+        # in the common list form used to raise TypeError during setup.
+        expected = '<p>a<br />\nb</p>\n'
+        self.assertEqual(
+            markdown2.markdown('a\nb', extras=['breaks', 'break-on-newline']),
+            expected)
+        self.assertEqual(
+            markdown2.markdown('a\nb', extras=['break-on-newline', 'breaks']),
+            expected)
+        # Each alone keeps its documented behaviour.
+        self.assertEqual(
+            markdown2.markdown('a\nb', extras=['break-on-newline']), expected)
+        self.assertEqual(
+            markdown2.markdown('a\nb', extras=['breaks']), '<p>a\nb</p>\n')
+        # A breaks dict with other options is preserved, not overwritten.
+        self.assertEqual(
+            markdown2.markdown(
+                'a\\\nb',
+                extras={'breaks': {'on_backslash': True},
+                        'break-on-newline': None}),
+            '<p>a<br />\nb</p>\n')
+    test_breaks_and_break_on_newline_together.tags = ["breaks", "extras"]
+    
+    def test_metadata_no_blank_line(self):
+        # A single-block document with no blank line (e.g. a tab-indented code
+        # block) gives the metadata extra nothing to split on, so re.split
+        # returns a single element. This used to raise IndexError; it should
+        # render normally with no metadata extracted.
+        result = markdown2.markdown('\tsome indented code', extras=['metadata'])
+        self.assertEqual(result, '<pre><code>some indented code\n</code></pre>\n')
+        self.assertEqual(result.metadata, {})
+    test_metadata_no_blank_line.tags = ["metadata", "issue"]
+
+    def test_metadata_leading_hr_no_closing_fence(self):
+        # A document that opens with '---' (a horizontal rule) but has no
+        # closing '---' fence is not front matter. This used to raise
+        # IndexError; it should render the '---' as an <hr>.
+        result = markdown2.markdown('---\n# My Document\n', extras=['metadata'])
+        self.assertEqual(result, '<hr />\n\n<h1>My Document</h1>\n')
+        self.assertEqual(result.metadata, {})
+    test_metadata_leading_hr_no_closing_fence.tags = ["metadata", "issue"]
+
+    def test_metadata_fenced_front_matter_still_parsed(self):
+        # A complete '---' fenced front-matter block is still extracted.
+        result = markdown2.markdown('---\ntitle: Hi\n---\n# Body\n',
+                                    extras=['metadata'])
+        self.assertEqual(result.metadata, {'title': 'Hi'})
+        self.assertEqual(result, '<h1>Body</h1>\n')
+    test_metadata_fenced_front_matter_still_parsed.tags = ["metadata"]
+
+    def test_metadata_still_parsed_without_fence(self):
+        # The fix must not change how leading key: value metadata is parsed.
+        result = markdown2.markdown('title: Hello\nauthor: Me\n\n# Body\n',
+                                    extras=['metadata'])
+        self.assertEqual(result.metadata, {'title': 'Hello', 'author': 'Me'})
+        self.assertEqual(result, '<h1>Body</h1>\n')
+    test_metadata_still_parsed_without_fence.tags = ["metadata"]
+
     def test_toc_with_persistent_object(self):
         """
         Tests that the toc is the same every time it's run on HTML, even if the Markdown object isn't disposed of.
