@@ -11,6 +11,7 @@
 - [pull #710] Add emoji support (#709)
 - [pull #713] Fix `header-ids` extra generating duplicate ids when a suffixed id collides with another header (#661)
 - [pull #705] XSS fixes in links, images, and more
+- [pull #720] Add `wiki-links` extra for `[[Page Name]]` style links (#221)
 
 
 ## python-markdown2 2.5.5
