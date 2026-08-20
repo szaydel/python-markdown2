@@ -100,6 +100,9 @@ see <https://github.com/trentm/python-markdown2/wiki/Extras> for details):
   a Table of Contents for the document. (experimental)
 * use-file-vars: Look for an Emacs-style markdown-extras file variable to turn
   on Extras.
+* wiki-links: Wiki-style `[[Page Name]]` links. The generated URL and CSS class
+  can be configured via the "base_url", "end_url", "html_class" and "build_url"
+  options.
 * wiki-tables: Google Code Wiki-style tables. See
   <http://code.google.com/p/support/wiki/WikiSyntax#Tables>.
 * wavedrom: Support for generating Wavedrom digital timing diagrams
@@ -4368,6 +4371,60 @@ class Wavedrom(Extra):
         return FencedCodeBlocks.fenced_code_block_re.sub(self.sub, text)
 
 
+class WikiLinks(Extra):
+    '''
+    Wiki-style links. `[[Page Name]]` becomes a link to another page. This is
+    modelled on the wikilinks extension shipped with Python-Markdown.
+
+    The generated URL and CSS class can be tuned with the following options:
+
+    - `base_url`: prepended to the link target (default `/`)
+    - `end_url`: appended to the link target (default `/`)
+    - `html_class`: the CSS class set on the generated `<a>` (default
+      `wikilink`; pass an empty string to omit the attribute)
+    - `build_url`: an optional callable `build_url(label, base_url, end_url)`
+      returning the href, for full control over the target
+
+    For example::
+
+        markdown('[[Foo Bar]]', extras={'wiki-links': {
+            'base_url': '/', 'end_url': '.html', 'html_class': 'localLink'}})
+
+    yields ``<a href="/Foo_Bar.html" class="localLink">Foo Bar</a>``.
+    '''
+    name = 'wiki-links'
+    order = (Stage.LINKS,), ()
+
+    _wiki_link_re = re.compile(r'\[\[([\w0-9_ -]+)\]\]', re.UNICODE)
+
+    def run(self, text: str) -> str:
+        return self._wiki_link_re.sub(self.sub, text)
+
+    def build_url(self, label: str) -> str:
+        base_url = self.options.get('base_url', '/')
+        end_url = self.options.get('end_url', '/')
+        build_url = self.options.get('build_url')
+        if build_url is not None:
+            return build_url(label, base_url, end_url)
+        return '%s%s%s' % (base_url, label.replace(' ', '_'), end_url)
+
+    def sub(self, match: re.Match[str]) -> str:
+        label = match.group(1).strip()
+        if not label:
+            # Nothing but whitespace between the brackets; leave it alone.
+            return match.group(0)
+        url = self.build_url(label).replace('"', '&quot;')
+        html_class = self.options.get('html_class', 'wikilink')
+        class_str = ' class="%s"' % html_class if html_class else ''
+        link = '<a href="%s"%s>%s</a>' % (url, class_str, label)
+        # Hash the finished anchor so later stages (emphasis, escaping, ...)
+        # don't mangle labels or URLs that contain "_" and friends.
+        return self.md._hash_span(link)
+
+    def test(self, text: str) -> bool:
+        return '[[' in text
+
+
 class WikiTables(Extra):
     '''
     Google Code Wiki-style tables. See
@@ -4449,6 +4506,7 @@ Tables.register()
 TelegramSpoiler.register()
 Underline.register()
 Wavedrom.register()
+WikiLinks.register()
 WikiTables.register()
 
 

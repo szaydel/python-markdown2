@@ -1,0 +1,15 @@
+See the [[Home Page]] or the [[About]] section.
+
+Wiki links work in the [[Middle Of A Sentence]] too.
+
+An `[[Inline Code]]` span is left untouched, and so is a fenced block:
+
+    [[Not A Link]]
+
+Labels containing an under_score, like [[snake_case_page]], are not
+turned into emphasis.
+
+Regular [Markdown links](https://example.com/) keep working alongside
+wiki links.
+
+Empty brackets like [[   ]] are ignored.
